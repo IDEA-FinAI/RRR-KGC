@@ -16,7 +16,7 @@ def cal_inter_candidate_list(llm_candidate_list, embedding_candidate_id_list, en
     rest_embedding_candidate_id_list = [candidate_id for candidate_id in embedding_candidate_id_list if candidate_id not in inter_candidate_id_list]
     return inter_candidate_id_list, rest_embedding_candidate_id_list
 
-def combine_inter_and_rest_after_extract(inter_candidate_id_list, embedding_candidate_id_list, rest_embedding_candidate_id_list, cand_num):
+def combine_inter_and_rest_after_reason(inter_candidate_id_list, embedding_candidate_id_list, rest_embedding_candidate_id_list, cand_num):
     list_for_rerank = embedding_candidate_id_list[:cand_num]
     list_rest = embedding_candidate_id_list[cand_num:]
     
@@ -36,13 +36,3 @@ def judge_train_val_valid(entity_label, head_id, relation_raw, tail_id, forward,
         if entity_label in train_valid_set_tail_mapping[key]:
             return False
     return True
-
-def ensemble_many_lists(embedding_candidate_id_list, final_candidate_id_list):
-    scores = {}
-    for idx, candidate in enumerate(embedding_candidate_id_list, start=1):
-        scores[candidate] = scores.get(candidate, 0) + 1 / idx
-    for idx, candidate in enumerate(final_candidate_id_list, start=1):
-        scores[candidate] = scores.get(candidate, 0) + 1 / idx
-
-    sorted_candidates = sorted(scores, key=scores.get, reverse=True)
-    return sorted_candidates

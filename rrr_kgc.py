@@ -6,8 +6,8 @@ import argparse
 import datetime
 from data_manager import DataManager
 from llm_api import run_gpt_chat, run_llm_chat
-from prompt_templates import H2T_TASK_TEMPLATE, T2H_TASK_TEMPLATE, EXTRACT_TEMPLATE, RANKING_TEMPLATE
-from utils import parse_answer_list_response, cal_inter_candidate_list, combine_inter_and_rest_after_extract, judge_train_val_valid, ensemble_many_lists
+from prompt_templates import H2T_TASK_TEMPLATE, T2H_TASK_TEMPLATE, REASON_TEMPLATE, RANKING_TEMPLATE
+from utils import parse_answer_list_response, cal_inter_candidate_list, combine_inter_and_rest_after_reason, judge_train_val_valid
 
 def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, cand_num, embedding, start_idx, end_idx):
     dm = DataManager(dataset, embedding, forward)
@@ -22,7 +22,7 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
     
     test_lines = test_lines[start_idx:end_idx] 
     embedding_list = []
-    extract_list = []
+    reason_list = []
     rerank_list = []
     count = start_idx
     for line in test_lines:
@@ -64,36 +64,36 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         
         task = H2T_TASK_TEMPLATE.format(head=entity2detail[head_id]['label'], relation=relation, sentence=sentence) if forward else T2H_TASK_TEMPLATE.format(tail=entity2detail[tail_id]['label'], relation=relation, sentence=sentence)
 
-        extract_messages = example_messages.copy()
-        extract_candidate_id_list = []
+        reason_messages = example_messages.copy()
+        reason_candidate_id_list = []
         if wiki_ctx:
             # Reasoning stage is preprocessed and saved. If you want to test the reasoning stage where no context is provided, you should activate the json file in no_ctx version.
-            gpt_extract_file = f"./data/{dataset}/reasoning_preprocessed_forward.json" if forward else f"./data/{dataset}/reasoning_preprocessed_backward.json"
-            # gpt_extract_file = f"./data/{dataset}/reasoning_preprocessed_forward_no_ctx.json" if forward else f"./data/{dataset}/reasoning_preprocessed_backward_no_ctx.json"
-            if os.path.exists(gpt_extract_file):
-                with open(gpt_extract_file, 'r', encoding='utf-8') as f:
-                    gpt_extract_response = json.load(f)
-                extract_response = gpt_extract_response[f"{head_id}\t{relation_raw}"] if forward else gpt_extract_response[f"{tail_id}\t{relation_raw}"]
+            gpt_reason_file = f"./data/{dataset}/reasoning_preprocessed_forward.json" if forward else f"./data/{dataset}/reasoning_preprocessed_backward.json"
+            # gpt_reason_file = f"./data/{dataset}/reasoning_preprocessed_forward_no_ctx.json" if forward else f"./data/{dataset}/reasoning_preprocessed_backward_no_ctx.json"
+            if os.path.exists(gpt_reason_file):
+                with open(gpt_reason_file, 'r', encoding='utf-8') as f:
+                    gpt_reason_response = json.load(f)
+                reason_response = gpt_reason_response[f"{head_id}\t{relation_raw}"] if forward else gpt_reason_response[f"{tail_id}\t{relation_raw}"]
             else:
                 materials = f"{entity2detail[head_id]['label']}: {entity2detail[head_id]['wikipedia_intro_long']}" if forward else f"{entity2detail[tail_id]['label']}: {entity2detail[tail_id]['wikipedia_intro_long']}"
-                extract_prompt = EXTRACT_TEMPLATE.format(materials=materials, task=task)
-                extract_messages.append({"role": "user", "content": extract_prompt})
-                for m in extract_messages:
+                reason_prompt = REASON_TEMPLATE.format(materials=materials, task=task)
+                reason_messages.append({"role": "user", "content": reason_prompt})
+                for m in reason_messages:
                     print(m)
-                extract_response = run_llm_chat(extract_messages, forward) if local else run_gpt_chat(extract_messages)
-            print("LLM extract_response:", extract_response)
-            llm_candidate_list = parse_answer_list_response(extract_response)
+                reason_response = run_llm_chat(reason_messages, forward) if local else run_gpt_chat(reason_messages)
+            print("LLM reason_response:", reason_response)
+            llm_candidate_list = parse_answer_list_response(reason_response)
             inter_candidate_id_list, rest_embedding_candidate_id_list = cal_inter_candidate_list(llm_candidate_list, embedding_candidate_id_list, entity2detail)
             inter_candidate_list = [entity2detail[candidate_id]['label'] for candidate_id in inter_candidate_id_list]
-            extract_candidate_id_list, new_cand_num = combine_inter_and_rest_after_extract(inter_candidate_id_list, embedding_candidate_id_list, rest_embedding_candidate_id_list, cand_num)
-            extract_candidate_list = [entity2detail[candidate_id]['label'] for candidate_id in extract_candidate_id_list]
+            reason_candidate_id_list, new_cand_num = combine_inter_and_rest_after_reason(inter_candidate_id_list, embedding_candidate_id_list, rest_embedding_candidate_id_list, cand_num)
+            reason_candidate_list = [entity2detail[candidate_id]['label'] for candidate_id in reason_candidate_id_list]
 
             print("LLM Candidate List:", llm_candidate_list)
             print("Inter Candidate List:", inter_candidate_list)
             print(f"{embedding} Candidate List:", embedding_candidate_list)
-            print("Extract Candidate List:", extract_candidate_list)
-            rerank_candidate_list = extract_candidate_list[:new_cand_num]
-            rerank_candidate_id_list = extract_candidate_id_list[:new_cand_num]
+            print("Reason Candidate List:", reason_candidate_list)
+            rerank_candidate_list = reason_candidate_list[:new_cand_num]
+            rerank_candidate_id_list = reason_candidate_id_list[:new_cand_num]
             print(f"{new_cand_num} Candidate List for Rerank: {rerank_candidate_list}")
         else:
             rerank_candidate_list = embedding_candidate_list[:cand_num]
@@ -126,7 +126,7 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         print(f"Final Candidate List: {final_candidate_list}")
 
         embedding_candidate_id_list = [candidate_id for candidate_id in embedding_candidate_id_list if (candidate_id not in drop_filter_candidates_id or candidate_id == groundtruth_id)]
-        extract_candidate_id_list = [candidate_id for candidate_id in extract_candidate_id_list if (candidate_id not in drop_filter_candidates_id or candidate_id == groundtruth_id)]
+        reason_candidate_id_list = [candidate_id for candidate_id in reason_candidate_id_list if (candidate_id not in drop_filter_candidates_id or candidate_id == groundtruth_id)]
         final_candidate_id_list = [candidate_id for candidate_id in final_candidate_id_list if (candidate_id not in drop_filter_candidates_id or candidate_id == groundtruth_id)]
 
         filtered_final_candate_list = [entity2detail[candidate_id]['label'] for candidate_id in final_candidate_id_list]
@@ -137,9 +137,9 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         print(f"{embedding} Hits@{embedding_hits}")
         embedding_list.append(embedding_hits)
         
-        extract_hits = extract_candidate_id_list.index(groundtruth_id) + 1 if groundtruth_id in extract_candidate_id_list else 0
-        print(f"Extract Hits@{extract_hits}")
-        extract_list.append(extract_hits)
+        reason_hits = reason_candidate_id_list.index(groundtruth_id) + 1 if groundtruth_id in reason_candidate_id_list else 0
+        print(f"Reason Hits@{reason_hits}")
+        reason_list.append(reason_hits)
 
         rerank_hits = final_candidate_id_list.index(groundtruth_id) + 1 if groundtruth_id in final_candidate_id_list else 0
         print(f"Rerank Hits@{rerank_hits}")
@@ -147,13 +147,13 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         
         if count % 100 == 0:
             print(f"{embedding} Score: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
-            print(f"Extract Score: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
+            print(f"Reason Score: MRR: {sum(1/h for h in reason_list if h >= 1) / len(reason_list):.3f} Hits@1: {sum(1 for h in reason_list if h == 1) / len(reason_list):.3f} Hits@3: {sum(1 for h in reason_list if h <= 3 and h >= 1) / len(reason_list):.3f} Hits@10: {sum(1 for h in reason_list if h <= 10 and h >= 1) / len(reason_list):.3f}")
             print(f"Rerank Score: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
         count += 1        
     
     print("Final Result:")
     print(f"{embedding} Score: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
-    print(f"Extract Score: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
+    print(f"Reason Score: MRR: {sum(1/h for h in reason_list if h >= 1) / len(reason_list):.3f} Hits@1: {sum(1 for h in reason_list if h == 1) / len(reason_list):.3f} Hits@3: {sum(1 for h in reason_list if h <= 3 and h >= 1) / len(reason_list):.3f} Hits@10: {sum(1 for h in reason_list if h <= 10 and h >= 1) / len(reason_list):.3f}")
     print(f"Rerank Score: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
 
 if __name__ == '__main__':

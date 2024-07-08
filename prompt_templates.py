@@ -1,7 +1,7 @@
 H2T_TASK_TEMPLATE = "The question is to predict the tail entity [MASK] from the given ({head}, {relation}, [MASK]) by completing the sentence '{sentence}'."
 T2H_TASK_TEMPLATE = "The question is to predict the head entity [MASK] from the given ([MASK], {relation}, {tail}) by completing the sentence '{sentence}'."
 
-EXTRACT_TEMPLATE = "Here are some materials for you to refer to. \n{materials}\n\
+REASON_TEMPLATE = "Here are some materials for you to refer to. \n{materials}\n\
 {task} \
 Output all the possible answers you can find in the materials using the format '[answer1, answer2, ..., answerN]' and please start your response with 'The possible answers:'. \
 Do not output anything except the possible answers. If you cannot find any answer, please output some possible answers based on your own knowledge."
