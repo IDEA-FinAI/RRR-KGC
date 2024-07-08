@@ -1,11 +1,12 @@
+import os
 from openai import OpenAI
 
-API_KEY = "" # Your API_KEY Here
+API_KEY = os.getenv("OPENAI_API_KEY") # Your API_KEY Here
 
 def run_gpt_chat(messages):
     client = OpenAI(
         api_key=API_KEY,
-        # base_url="https://api.openai-proxy.com/v1"
+        base_url="https://api.openai-proxy.com/v1"
     )
     attempt = 0
     while attempt < 3:

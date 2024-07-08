@@ -4,27 +4,26 @@ import json
 import re
 import argparse
 import datetime
-from datasets import Datasets
+from data_manager import DataManager
 from llm_api import run_gpt_chat, run_llm_chat
 from prompt_templates import H2T_TASK_TEMPLATE, T2H_TASK_TEMPLATE, EXTRACT_TEMPLATE, RANKING_TEMPLATE
 from utils import parse_answer_list_response, cal_inter_candidate_list, combine_inter_and_rest_after_extract, judge_train_val_valid, ensemble_many_lists
 
 def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, cand_num, embedding, start_idx, end_idx):
-    ds = Datasets(dataset, embedding, forward)
-    entity2detail = ds.entity2detail
-    alignment = ds.alignment
-    e2idx, r2idx, idx2e, idx2r = ds.e2idx, ds.r2idx, ds.idx2e, ds.idx2r
-    train_set = ds.train_set
-    candidate_dict = ds.candidate_dict
-    train_valid_set_tail_mapping = ds.train_valid_set_tail_mapping
-    test_lines = ds.test_lines
-    test_set_tail_mapping = ds.test_set_tail_mapping
+    dm = DataManager(dataset, embedding, forward)
+    entity2detail = dm.entity2detail
+    alignment = dm.alignment
+    e2idx, r2idx, idx2e, idx2r = dm.e2idx, dm.r2idx, dm.idx2e, dm.idx2r
+    train_set = dm.train_set
+    candidate_dict = dm.candidate_dict
+    train_valid_set_tail_mapping = dm.train_valid_set_tail_mapping
+    test_lines = dm.test_lines
+    test_set_tail_mapping = dm.test_set_tail_mapping
     
     test_lines = test_lines[start_idx:end_idx] 
     embedding_list = []
     extract_list = []
     rerank_list = []
-    ensemble_list = []
     count = start_idx
     for line in test_lines:
         print("*"*50)
@@ -43,15 +42,15 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         drop_filter_candidates = [entity2detail[candidate_id]['label'] for candidate_id in drop_filter_candidates_id]
         print(f"{len(drop_filter_candidates) - 1} filter candidates to be dropped except itself: {drop_filter_candidates}")
         
-        sentence = ds.load_sentence(head=entity2detail[head_id]['label'], relation_raw=relation_raw, relation=relation, tail=entity2detail[tail_id]['label'])
+        sentence = dm.load_sentence(head=entity2detail[head_id]['label'], relation_raw=relation_raw, relation=relation, tail=entity2detail[tail_id]['label'])
         
         example_messages = []
         if fsl > 0:
             cur_entity = head_id if forward else tail_id
-            few_shot_pairs = ds.load_few_shot(cur_entity=cur_entity, relation=relation_raw, count=fsl)[::-1] # Reverse
+            few_shot_pairs = dm.load_few_shot(cur_entity=cur_entity, relation=relation_raw, count=fsl)[::-1] # Reverse
             for head_e_id, tail_e_id in few_shot_pairs:
                 user_message, assistant_message = "", ""
-                fewshot_sentence = ds.load_sentence(head=entity2detail[head_e_id]['label'], relation_raw=relation_raw, relation=relation, tail=entity2detail[tail_e_id]['label'])
+                fewshot_sentence = dm.load_sentence(head=entity2detail[head_e_id]['label'], relation_raw=relation_raw, relation=relation, tail=entity2detail[tail_e_id]['label'])
                 if fs_ctx:
                     user_message += f"{entity2detail[head_e_id]['label']}: {entity2detail[head_e_id]['description']}\n" if forward else f"{entity2detail[tail_e_id]['label']}: {entity2detail[tail_e_id]['description']}\n"
                 task = H2T_TASK_TEMPLATE.format(head=entity2detail[head_e_id]['label'], relation=relation, sentence=fewshot_sentence) if forward else T2H_TASK_TEMPLATE.format(tail=entity2detail[tail_e_id]['label'], relation=relation, sentence=fewshot_sentence)
@@ -147,15 +146,15 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         rerank_list.append(rerank_hits)
         
         if count % 100 == 0:
-            print(f"{embedding} Result: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
-            print(f"Extract Result: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
-            print(f"Rerank Result: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
+            print(f"{embedding} Score: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
+            print(f"Extract Score: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
+            print(f"Rerank Score: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
         count += 1        
     
     print("Final Result:")
-    print(f"{embedding} Result: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
-    print(f"Extract Result: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
-    print(f"Rerank Result: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
+    print(f"{embedding} Score: MRR: {sum(1/h for h in embedding_list if h >= 1) / len(embedding_list):.3f} Hits@1: {sum(1 for h in embedding_list if h == 1) / len(embedding_list):.3f} Hits@3: {sum(1 for h in embedding_list if h <= 3 and h >= 1) / len(embedding_list):.3f} Hits@10: {sum(1 for h in embedding_list if h <= 10 and h >= 1) / len(embedding_list):.3f}")
+    print(f"Extract Score: MRR: {sum(1/h for h in extract_list if h >= 1) / len(extract_list):.3f} Hits@1: {sum(1 for h in extract_list if h == 1) / len(extract_list):.3f} Hits@3: {sum(1 for h in extract_list if h <= 3 and h >= 1) / len(extract_list):.3f} Hits@10: {sum(1 for h in extract_list if h <= 10 and h >= 1) / len(extract_list):.3f}")
+    print(f"Rerank Score: MRR: {sum(1/h for h in rerank_list if h >= 1) / len(rerank_list):.3f} Hits@1: {sum(1 for h in rerank_list if h == 1) / len(rerank_list):.3f} Hits@3: {sum(1 for h in rerank_list if h <= 3 and h >= 1) / len(rerank_list):.3f} Hits@10: {sum(1 for h in rerank_list if h <= 10 and h >= 1) / len(rerank_list):.3f}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run Knowledge Graph Completion with various modes.")
@@ -167,7 +166,7 @@ if __name__ == '__main__':
     parser.add_argument('--cand_ctx', action='store_true', help='context in candidate list or not')
     parser.add_argument('--fsl', type=int, default=2, help='Few-shot learning mode')
     parser.add_argument('--cand_num', type=int, default=5, help='candidate number')
-    parser.add_argument('--embedding', type=str, default='RotatE', help='embedding mode')
+    parser.add_argument('--embedding', type=str, default='RotatE', choices=['RotatE', 'GIE', 'ComplEx'], help='embedding mode')
     parser.add_argument('--start_idx', type=int, default=9, help='start index of test set')
     parser.add_argument('--end_idx', type=int, default=10, help='end index of test set')
     args = parser.parse_args()

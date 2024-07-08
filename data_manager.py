@@ -1,6 +1,6 @@
 import json
 
-class Datasets:
+class DataManager:
     def __init__(self, dataset, embedding, forward):
         self.dataset = dataset
         self.embedding = embedding
