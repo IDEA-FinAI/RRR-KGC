@@ -80,7 +80,7 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
                 reason_messages.append({"role": "user", "content": reason_prompt})
                 for m in reason_messages:
                     print(m)
-                reason_response = run_llm_chat(reason_messages, forward) if local else run_gpt_chat(reason_messages)
+                reason_response = run_llm_chat(reason_messages) if local else run_gpt_chat(reason_messages)
             print("LLM reason_response:", reason_response)
             llm_candidate_list = parse_answer_list_response(reason_response)
             inter_candidate_id_list, rest_embedding_candidate_id_list = cal_inter_candidate_list(llm_candidate_list, embedding_candidate_id_list, entity2detail)
@@ -113,7 +113,7 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, cand_ctx, fsl, ca
         ranking_messages.append({"role": "user", "content": ranking_prompt})
         print(f"Ranking Prompt:{ranking_messages[-1]}")
         
-        response = run_llm_chat(ranking_messages, forward) if local else run_gpt_chat(ranking_messages)
+        response = run_llm_chat(ranking_messages) if local else run_gpt_chat(ranking_messages)
         print("LLM Response:", response) 
         response_list = parse_answer_list_response(response)
 

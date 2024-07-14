@@ -23,10 +23,10 @@ def run_gpt_chat(messages):
             attempt += 1
     return "Error"
 
-def run_llm_chat(messages, forward):
+def run_llm_chat(messages):
     client = OpenAI(
         api_key="EMPTY",
-        base_url="http://localhost:8000/v1" if forward else "http://localhost:8001/v1" # Your Local LLM API Port Here
+        base_url="http://localhost:8000/v1"
     )
     attempt = 0
     while attempt < 3:
