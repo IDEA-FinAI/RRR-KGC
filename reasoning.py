@@ -4,20 +4,48 @@ import json
 import re
 import argparse
 import datetime
-from openai import OpenAI
+
+# from openai import OpenAI
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm import tqdm
 
 API_KEY = "" # your OpenAI API key
 
 H2T_TASK_TEMPLATE = "The question is to predict the tail entity [MASK] from the given ({head}, {relation}, [MASK]) by completing the sentence '{sentence}'."
 T2H_TASK_TEMPLATE = "The question is to predict the head entity [MASK] from the given ([MASK], {relation}, {tail}) by completing the sentence '{sentence}'."
 
-# EXTRACT_TEMPLATE = "Here are some materials for you to refer to. \n{materials}\n\
-# {task} \
-# Output all the possible answers you can find in the materials using the format [answer1, answer2, ..., answerN] and please start your response with 'The possible answers:'. \
-# Do not output anything except the possible answers. If you cannot find any answer, please output some possible answers based on your own knowledge."
+EXTRACT_TEMPLATE = "Here are some materials for you to refer to. \n{materials}\n\
+{task} \
+Output all the possible answers you can find in the materials using the format [answer1, answer2, ..., answerN] and please start your response with 'The possible answers:'. \
+Do not output anything except the possible answers. If you cannot find any answer, please output some possible answers based on your own knowledge."
 
-EXTRACT_TEMPLATE = "{task}\nOutput some possible answers based on your knowledge using the format [answer1, answer2, ..., answerN] and please start your response with 'The possible answers:'. \
+EXTRACT_TEMPLATE_WITHOUT_CTX = "{task}\nOutput some possible answers based on your knowledge using the format [answer1, answer2, ..., answerN] and please start your response with 'The possible answers:'. \
 Do not output anything except the possible answers."
+
+
+device = "cuda"
+
+def run_llm_chat(model, tokenizer, messages):
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+    model_inputs = tokenizer([text], return_tensors="pt").to(device)
+
+    generated_ids = model.generate(
+        model_inputs.input_ids,
+        max_new_tokens=512,
+        do_sample=False,
+    )
+    generated_ids = [
+        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+    return response
+
 
 def run_gpt_chat(messages):
     client = OpenAI(
@@ -97,12 +125,35 @@ def load_entity_relation(dataset: str = 'FB15k237'):
     return e2idx, r2idx, idx2e, idx2r
 
 def parse_answer_list_response(response):
+    response = response.replace('The possible answers: \n- ', '').replace('\n-', ',')
     return response.replace('The possible answers:', '').replace('The final order:', '').replace('[', '').replace(']', '').strip().split(', ')
 
-def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, fsl, start_idx, end_idx):
+def run_kgc_ranking(dataset, model_name, forward, fs_ctx, wiki_ctx, fsl, start_idx, end_idx, model_path):
     entity2wiki = load_entity2wikidata(f'./data/{dataset}/entity2detail.json')
     alignment = load_alignment(f'./data/{dataset}/alignment.txt')
     e2idx, r2idx, idx2e, idx2r = load_entity_relation(dataset)
+
+    if model_path is None:
+        model_path = model_name
+
+    if 'GPT' not in model_name:
+        # model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype="auto", device_map="auto")
+        # tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # tokenizer.pad_token = tokenizer.eos_token
+        # generation_config = dict(
+        #     temperature=0,
+        #     top_k=0,
+        #     top_p=0,
+        #     do_sample=False,
+        #     max_new_tokens=512,
+        # )
+        # model.cuda()
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     train_set = {}
     with open(f'data/{dataset}/train.txt', 'r') as file:
@@ -120,7 +171,7 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, fsl, start_idx, e
     count = start_idx
     llm_response_dict = {}
 
-    for line in test_lines:
+    for _, line in enumerate(tqdm(test_lines)):
         head_id, relation_raw, tail_id = line.strip().split('\t')
         groundtruth_id = tail_id if forward else head_id
         groundtruth = entity2wiki[groundtruth_id]['label']
@@ -158,25 +209,64 @@ def run_kgc_ranking(dataset, local, forward, fs_ctx, wiki_ctx, fsl, start_idx, e
         extract_candidate_id_list = []
         if wiki_ctx:
             # Reasoning with context
-            # materials = f"{entity2wiki[head_id]['label']}: {entity2wiki[head_id]['wikipedia_intro_long']}" if forward else f"{entity2wiki[tail_id]['label']}: {entity2wiki[tail_id]['wikipedia_intro_long']}"
-            # extract_prompt = EXTRACT_TEMPLATE.format(materials=materials, task=task)
+            if forward:
+                entity_intro = entity2wiki[head_id]['wikipedia_intro_long'] if 'wikipedia_intro_long' in entity2wiki[head_id]['wikipedia_intro_long'] else None
+                if entity_intro is None and 'wikipedia_intro' in entity2wiki[head_id]:
+                    entity_intro = entity2wiki[head_id]['wikipedia_intro']
+                if entity_intro is None and 'description' in entity2wiki[head_id]:
+                    entity_intro = entity2wiki[head_id]['description']
+                if entity_intro is None:
+                    entity_intro = entity2wiki[head_id]['label']
+            else:
+                entity_intro = entity2wiki[tail_id]['wikipedia_intro_long'] if 'wikipedia_intro_long' in \
+                                                                               entity2wiki[tail_id][
+                                                                                   'wikipedia_intro_long'] else None
+                if entity_intro is None and 'wikipedia_intro' in entity2wiki[tail_id]:
+                    entity_intro = entity2wiki[tail_id]['wikipedia_intro']
+                if entity_intro is None and 'description' in entity2wiki[tail_id]:
+                    entity_intro = entity2wiki[tail_id]['description']
+                if entity_intro is None:
+                    entity_intro = entity2wiki[tail_id]['label']
+            materials = f"{entity2wiki[head_id]['label']}: {entity_intro}" if forward else f"{entity2wiki[tail_id]['label']}: {entity_intro}"
+            extract_prompt = EXTRACT_TEMPLATE.format(materials=materials, task=task)
             # Reasoning without context
-            extract_prompt = EXTRACT_TEMPLATE.format(task=task)
+            #   extract_prompt = EXTRACT_TEMPLATE_WITHOUT_CTX.format(task=task)
             extract_messages.append({"role": "user", "content": extract_prompt})
-            extract_response = run_llm_chat(extract_messages) if local else run_gpt_chat(extract_messages)
-        llm_response_dict[key] = extract_response
-        os.makedirs("extract", exist_ok=True)
-        direction = "forward" if forward else "backward"
-        with open(f"extract/gpt_extract_{dataset}_{direction}.json", 'w', encoding='utf-8') as file:
-            json.dump(llm_response_dict, file, indent=4, ensure_ascii=False)
+            if "GPT" in model_name:
+                extract_response = run_gpt_chat(extract_messages)
+            else:
+                extract_response = run_llm_chat(model, tokenizer, extract_messages)
+                # print(extract_response)
+                # print(extract_messages)
+                # print('\n')
+            llm_response_dict[key] = extract_response
+            os.makedirs("extract", exist_ok=True)
+            direction = "forward" if forward else "backward"
+            with open(f"extract/{model_name}_extract_{dataset}_{direction}.json", 'w', encoding='utf-8') as file:
+                json.dump(llm_response_dict, file, indent=4, ensure_ascii=False)
+        else:
+            extract_prompt = EXTRACT_TEMPLATE_WITHOUT_CTX.format(task=task)
+            extract_messages.append({"role": "user", "content": extract_prompt})
+            if "GPT" in model_name:
+                extract_response = run_gpt_chat(extract_messages)
+            else:
+                extract_response = run_llm_chat(model, tokenizer, extract_messages)
+            llm_response_dict[key] = extract_response
+            os.makedirs("extract", exist_ok=True)
+            direction = "forward" if forward else "backward"
+            with open(f"extract/{model_name}_extract_{dataset}_{direction}_no_ctx.json", 'w', encoding='utf-8') as file:
+                json.dump(llm_response_dict, file, indent=4, ensure_ascii=False)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run Knowledge Graph Completion with various modes.")
     parser.add_argument('--gen', action='store_true', help='Generative KGC')
     parser.add_argument('--rank', action='store_true', help='Ranking KGC')
     parser.add_argument('--forward', action='store_true', help='forward KGC')
-    parser.add_argument('--local', action='store_true', help='Local LLM mode') # GPT default
-    parser.add_argument('--dataset', type=str, default='FB15k237', choices=['FB15k237', 'YAGO3-10'], help='dataset name')
+    #   parser.add_argument('--local', action='store_true', help='Local LLM mode') # GPT default
+    parser.add_argument('--model_name', type=str, default='GPT', )
+    parser.add_argument('--model_path', type=str, default='/data/FinAi_Mapping_Knowledge/finllm/LLMs/Meta-Llama-3-8B-Instruct')
+    parser.add_argument('--dataset', type=str, default='FB15k237', choices=['FB15k237', 'WN18RR', 'YAGO3-10'], help='dataset name')
     parser.add_argument('--fs_ctx', action='store_true', help='context in fewshot or not')
     parser.add_argument('--wiki_ctx', action='store_true', help='context from wikipedia or not')
     parser.add_argument('--fsl', type=int, default=0, help='Few-shot learning mode')
@@ -190,5 +280,6 @@ if __name__ == '__main__':
     if args.gen:
         run_kgc_gen(dataset=args.dataset, forward=args.forward, local=args.local, fs_ctx=args.fs_ctx, wiki_ctx=args.wiki_ctx, fsl=args.fsl, size=args.size)
     elif args.rank:
-        run_kgc_ranking(dataset=args.dataset, forward=args.forward, local=args.local, fs_ctx=args.fs_ctx, wiki_ctx=args.wiki_ctx, fsl=args.fsl, start_idx=args.start_idx, end_idx=args.end_idx)
+        run_kgc_ranking(dataset=args.dataset, forward=args.forward, model_name=args.model_name, fs_ctx=args.fs_ctx,
+                        wiki_ctx=args.wiki_ctx, fsl=args.fsl, start_idx=args.start_idx, end_idx=args.end_idx, model_path=args.model_path)
     
